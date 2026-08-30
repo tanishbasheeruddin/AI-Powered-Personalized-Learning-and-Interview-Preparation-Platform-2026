@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: ai-learning-platform-api
+    runtime: node
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: FRONTEND_URL
+        value: https://ai-powered-personalized-learning-and-interview-preparation-platform.vercel.app
+      - key: DATABASE_URL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
