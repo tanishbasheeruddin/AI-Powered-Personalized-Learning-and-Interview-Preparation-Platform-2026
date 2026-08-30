@@ -1,0 +1,16 @@
+name: Package Project
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  zip:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create ZIP
+        run: zip -r AI-Powered-Personalized-Learning-and-Interview-Preparation-Platform-2026.zip . -x '.git/*' '.github/*'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ai-learning-platform-complete
+          path: AI-Powered-Personalized-Learning-and-Interview-Preparation-Platform-2026.zip
