@@ -1,0 +1,9 @@
+{
+  "name":"ai-learning-platform",
+  "private":true,
+  "scripts":{
+    "install:backend":"npm --prefix backend install",
+    "start":"npm --prefix backend start",
+    "db:init":"npm --prefix backend run db:init"
+  }
+}
