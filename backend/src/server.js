@@ -1,64 +1,33 @@
-import express from "express";
-import cors from "cors";
-import dotenv from "dotenv";
-import { Pool } from "pg";
-
+import express from 'express';
+import cors from 'cors';
+import dotenv from 'dotenv';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import OpenAI from 'openai';
+import { Pool } from 'pg';
 dotenv.config();
-
-const app = express();
-const port = process.env.PORT || 5000;
-const pool = process.env.DATABASE_URL ? new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : false }) : null;
-
-app.use(cors({ origin: process.env.FRONTEND_URL || "http://localhost:5173" }));
-app.use(express.json());
-
-app.get("/api/health", async (_req, res) => {
-  let database = "not configured";
-  if (pool) {
-    try { await pool.query("SELECT 1"); database = "connected"; }
-    catch { database = "error"; }
-  }
-  res.json({ ok: true, database });
-});
-
-app.get("/api/courses", (_req, res) => {
-  res.json([
-    { id: 1, title: "Java Programming", level: "Beginner → Advanced", progress: 72 },
-    { id: 2, title: "Python Programming", level: "Beginner → Advanced", progress: 45 },
-    { id: 3, title: "C++ & DSA", level: "Intermediate", progress: 28 },
-    { id: 4, title: "JavaScript", level: "Beginner → Advanced", progress: 61 }
-  ]);
-});
-
-app.post("/api/mock-tests/generate", (req, res) => {
-  const { language = "Java", difficulty = "Medium", count = 10 } = req.body;
-  const questions = Array.from({ length: Math.min(Number(count) || 10, 20) }, (_, i) => ({
-    id: i + 1,
-    question: `AI-generated ${difficulty} ${language} question ${i + 1}`,
-    options: ["Option A", "Option B", "Option C", "Option D"],
-    answer: 0
-  }));
-  res.json({ language, difficulty, questions });
-});
-
-app.post("/api/interviews/session", (req, res) => {
-  const { type = "Technical", language = "Java" } = req.body;
-  res.json({
-    id: `interview_${Date.now()}`,
-    type,
-    language,
-    status: "created",
-    message: "Interview session created. Connect your AI provider for live question generation."
-  });
-});
-
-app.post("/api/ai/evaluate", (req, res) => {
-  const { answer = "" } = req.body;
-  res.json({
-    score: Math.min(100, 55 + Math.round(answer.length / 8)),
-    strengths: ["Relevant response", "Clear basic explanation"],
-    improvements: ["Add a concrete example", "Structure the answer with a definition, example, and conclusion"]
-  });
-});
-
-app.listen(port, () => console.log(`API running on http://localhost:${port}`));
+const app=express(); const port=process.env.PORT||5000;
+const pool=process.env.DATABASE_URL?new Pool({connectionString:process.env.DATABASE_URL,ssl:process.env.NODE_ENV==='production'?{rejectUnauthorized:false}:false}):null;
+const openai=process.env.OPENAI_API_KEY?new OpenAI({apiKey:process.env.OPENAI_API_KEY}):null;
+app.use(cors({origin:true,credentials:true})); app.use(express.json({limit:'2mb'}));
+const q=async(sql,params=[])=>{if(!pool)throw new Error('DATABASE_URL is not configured');return pool.query(sql,params)};
+const token=u=>jwt.sign({id:u.id,name:u.name,email:u.email,role:u.role},process.env.JWT_SECRET||'dev-only-secret',{expiresIn:'7d'});
+const auth=async(req,res,next)=>{try{const h=req.headers.authorization||'';const t=h.startsWith('Bearer ')?h.slice(7):'';if(!t)return res.status(401).json({error:'Authentication required'});req.user=jwt.verify(t,process.env.JWT_SECRET||'dev-only-secret');next()}catch{return res.status(401).json({error:'Invalid or expired token'})}};
+app.get('/api/health',async(_req,res)=>{let database='not configured';if(pool)try{await q('SELECT 1');database='connected'}catch{database='error'}res.json({ok:true,database,ai:!!openai})});
+app.post('/api/auth/register',async(req,res)=>{try{const{name,email,password}=req.body;if(!name||!email||!password||password.length<6)return res.status(400).json({error:'Name, email and password (6+ characters) are required'});const hash=await bcrypt.hash(password,12);const r=await q('INSERT INTO users(name,email,password_hash) VALUES($1,$2,$3) RETURNING id,name,email,role',[name,email.toLowerCase(),hash]);res.status(201).json({user:r.rows[0],token:token(r.rows[0])})}catch(e){res.status(400).json({error:e.code==='23505'?'Email already registered':'Registration failed'})}});
+app.post('/api/auth/login',async(req,res)=>{try{const{email,password}=req.body;const r=await q('SELECT * FROM users WHERE email=$1',[String(email||'').toLowerCase()]);if(!r.rowCount||!await bcrypt.compare(password||'',r.rows[0].password_hash))return res.status(401).json({error:'Invalid email or password'});const{password_hash,...u}=r.rows[0];res.json({user:u,token:token(u)})}catch(e){res.status(500).json({error:e.message})}});
+app.get('/api/me',auth,async(req,res)=>{const r=await q('SELECT id,name,email,role,created_at FROM users WHERE id=$1',[req.user.id]);res.json(r.rows[0])});
+app.get('/api/courses',async(_req,res)=>{const r=await q('SELECT id,title,language,level,description,content FROM courses ORDER BY id');res.json(r.rows)});
+app.post('/api/courses/:id/enroll',auth,async(req,res)=>{await q('INSERT INTO enrollments(user_id,course_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[req.user.id,req.params.id]);res.json({ok:true})});
+const bank={Java:[['Which principle lets a subclass redefine a parent method?',['Encapsulation','Overriding','Aggregation','Casting'],1],['Which collection does not allow duplicates?',['List','Set','Map','ArrayList'],1],['What does JVM execute?',['Source code','Bytecode','SQL','HTML'],1]],Python:[['Which keyword defines a function?',['func','def','function','lambda'],1],['Which type is immutable?',['list','dict','set','tuple'],3]],'C++':[['Which feature supports many forms?',['Polymorphism','Compilation','Linking','Parsing'],0],['Which STL container is dynamic array?',['vector','stack','queue','map'],0]],C:[['Which symbol gets an address?',['*','&','%','$'],1]],JavaScript:[['Which keyword declares a block-scoped variable?',['var','let','define','constonly'],1]],SQL:[['Which clause filters grouped results?',['WHERE','GROUP BY','HAVING','ORDER'],2]]};
+app.post('/api/mock-tests/generate',auth,async(req,res)=>{const{language='Java',difficulty='Medium',count=10}=req.body;let base=bank[language]||bank.Java;let questions=Array.from({length:Math.min(Number(count)||10,20)},(_,i)=>{const x=base[i%base.length];return{id:i+1,question:x[0],options:x[1],answer:x[2]}});if(openai){try{const prompt=`Create ${Math.min(Number(count)||10,20)} ${difficulty} multiple choice interview questions for ${language}. Return JSON array with question, options (4 strings), answer (0-3).`;const r=await openai.chat.completions.create({model:process.env.AI_MODEL||'gpt-4o-mini',messages:[{role:'system',content:'Return only valid JSON.'},{role:'user',content:prompt}],temperature:.6});questions=JSON.parse(r.choices[0].message.content)}}catch{}}const r=await q('INSERT INTO mock_tests(user_id,language,difficulty,total,questions) VALUES($1,$2,$3,$4,$5) RETURNING id',[req.user.id,language,difficulty,questions.length,JSON.stringify(questions)]);res.json({testId:r.rows[0].id,language,difficulty,questions:questions.map(({answer,...x})=>x)})});
+app.post('/api/mock-tests/:id/submit',auth,async(req,res)=>{const{answers=[]}=req.body;const r=await q('SELECT * FROM mock_tests WHERE id=$1 AND user_id=$2',[req.params.id,req.user.id]);if(!r.rowCount)return res.status(404).json({error:'Test not found'});const qs=r.rows[0].questions;let score=0;qs.forEach((x,i)=>{if(Number(answers[i])===Number(x.answer))score++});const pct=Math.round(score/qs.length*100);await q('UPDATE mock_tests SET score=$1,answers=$2,completed_at=NOW() WHERE id=$3',[pct,JSON.stringify(answers),req.params.id]);await q('INSERT INTO learning_events(user_id,event_type,topic,score) VALUES($1,$2,$3,$4)',[req.user.id,'mock_test',r.rows[0].language,pct]);res.json({score:pct,correct:score,total:qs.length})});
+app.get('/api/dashboard',auth,async(req,res)=>{const[c,t,i,n]=await Promise.all([q('SELECT COUNT(*) FROM enrollments WHERE user_id=$1',[req.user.id]),q('SELECT COUNT(*) FROM mock_tests WHERE user_id=$1 AND completed_at IS NOT NULL',[req.user.id]),q('SELECT COUNT(*) FROM interview_sessions WHERE user_id=$1',[req.user.id]),q('SELECT ROUND(COALESCE(AVG(score),0)) score FROM learning_events WHERE user_id=$1',[req.user.id])]);res.json({courses:Number(c.rows[0].count),tests:Number(t.rows[0].count),interviews:Number(i.rows[0].count),readiness:Number(n.rows[0].score)||0})});
+app.post('/api/interviews/session',auth,async(req,res)=>{const{type='Technical',language='Java'}=req.body;const r=await q('INSERT INTO interview_sessions(user_id,interview_type,language) VALUES($1,$2,$3) RETURNING id,interview_type,language,started_at',[req.user.id,type,language]);res.status(201).json(r.rows[0])});
+app.post('/api/interviews/:id/answer',auth,async(req,res)=>{const{question,answer}=req.body;let result={score:Math.min(100,50+Math.round(String(answer||'').length/5)),feedback:'Add concrete examples, explain your reasoning, and structure the answer clearly.'};if(openai)try{const x=await openai.chat.completions.create({model:process.env.AI_MODEL||'gpt-4o-mini',response_format:{type:'json_object'},messages:[{role:'system',content:'Evaluate interview answers. Return JSON with score 0-100 and feedback string.'},{role:'user',content:`Question: ${question}\nAnswer: ${answer}`} ]});result=JSON.parse(x.choices[0].message.content)}catch{}await q('INSERT INTO interview_answers(session_id,question,answer,score,feedback) VALUES($1,$2,$3,$4,$5)',[req.params.id,question,answer,result.score,result.feedback]);res.json(result)});
+app.post('/api/interviews/:id/end',auth,async(req,res)=>{const r=await q('SELECT COALESCE(ROUND(AVG(score)),0) score FROM interview_answers a JOIN interview_sessions s ON s.id=a.session_id WHERE a.session_id=$1 AND s.user_id=$2',[req.params.id,req.user.id]);await q('UPDATE interview_sessions SET overall_score=$1,ended_at=NOW() WHERE id=$2 AND user_id=$3',[r.rows[0].score,req.params.id,req.user.id]);res.json({score:Number(r.rows[0].score)})});
+app.get('/api/notes',auth,async(req,res)=>{const r=await q('SELECT * FROM notes WHERE user_id=$1 ORDER BY updated_at DESC',[req.user.id]);res.json(r.rows)});
+app.post('/api/notes',auth,async(req,res)=>{const r=await q('INSERT INTO notes(user_id,title,content) VALUES($1,$2,$3) RETURNING *',[req.user.id,req.body.title||'Untitled',req.body.content||'']);res.status(201).json(r.rows[0])});
+app.delete('/api/notes/:id',auth,async(req,res)=>{await q('DELETE FROM notes WHERE id=$1 AND user_id=$2',[req.params.id,req.user.id]);res.json({ok:true})});
+app.post('/api/ai/ask',auth,async(req,res)=>{const{message}=req.body;if(!openai)return res.json({answer:'AI provider is not configured yet. Add OPENAI_API_KEY in Render environment variables to enable the live AI assistant.'});try{const r=await openai.chat.completions.create({model:process.env.AI_MODEL||'gpt-4o-mini',messages:[{role:'system',content:'You are a friendly programming tutor. Explain clearly with examples and guide students rather than blindly giving answers.'},{role:'user',content:String(message||'')} ]});res.json({answer:r.choices[0].message.content})}catch(e){res.status(500).json({error:e.message})}});
+app.listen(port,()=>console.log(`API running on port ${port}`));
